@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Video App</title>
+</head>
+
+<body>
+    <div class="container">
+        <div class="video-container">
+            <video id="local-video" autoplay muted></video>
+            <video id="remote-video" autoplay></video>
+        </div>
+        <div class="user-info">
+            <h3>Your ID: <span id="myId"></span></h3>
+            <h3>Online Users</h3>
+            <div id="users"></div>
+            <p id="status"></p>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        const peer = new RTCPeerConnection({
+            iceServers: [{ urls: "stun:stun.stunprotocol.org" }]
+        });
+
+        const addUserMedia = async () => {
+            const localStream = await navigator.mediaDevices.getUserMedia({ video: true });
+            document.getElementById('local-video').srcObject = localStream;
+            localStream.getTracks().forEach(track => peer.addTrack(track, localStream));
+            return localStream;
+        };
+
+        const createCall = async (to) => {
+            const status = document.getElementById('status');
+            status.innerText = `Calling ${to}`;
+
+            await addUserMedia();
+
+            const offer = await peer.createOffer();
+            await peer.setLocalDescription(new RTCSessionDescription(offer));
+
+            socket.emit('outgoing:call', { fromOffer: offer, to });
+        };
+
+        peer.ontrack = ({ streams: [stream] }) => {
+            document.getElementById('remote-video').srcObject = stream;
+        };
+
+        socket.on('users:joined', id => {
+            const usersDiv = document.getElementById('users');
+            const btn = document.createElement('button');
+            btn.textContent = id;
+            btn.onclick = () => createCall(id);
+            usersDiv.appendChild(btn);
+        });
+
+        socket.on('incoming:answere', async ({ offer }) => {
+            await peer.setRemoteDescription(new RTCSessionDescription(offer));
+            document.getElementById('status').innerText = 'Connected';
+        });
+
+        socket.on('user:disconnect', id => {
+            document.getElementById(id)?.remove();
+        });
+
+        socket.on('incoming:call', async ({ from, offer }) => {
+            await addUserMedia();
+
+            await peer.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peer.createAnswer();
+            await peer.setLocalDescription(new RTCSessionDescription(answer));
+
+            socket.emit('call:accepted', { answer, to: from });
+            document.getElementById('status').innerText = 'Call Accepted';
+        });
+
+        socket.on('hello', ({ id }) => document.getElementById('myId').innerText = id);
+
+        window.onload = async () => {
+            const response = await fetch('/users');
+            const users = await response.json();
+            const usersDiv = document.getElementById('users');
+            users.forEach(user => {
+                const btn = document.createElement('button');
+                btn.textContent = user[0];
+                btn.onclick = () => createCall(user[0]);
+                usersDiv.appendChild(btn);
+            });
+
+            await addUserMedia(); // Initialize local video when the page loads
+        };
+    </script>
+</body>
+</html>
